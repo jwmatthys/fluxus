@@ -12,6 +12,5 @@ lib*.a
 /config.log
 /src/base.c
 .sconsign.dblite
-helpmap.scm
 moc_*.cc
 *.pyc

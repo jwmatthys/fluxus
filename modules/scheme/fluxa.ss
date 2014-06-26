@@ -18,10 +18,12 @@
 		"fluxus-modules.ss"
 		scheme/list)
 (provide
-		play play-now seq clock-map clock-split volume pan max-synths note searchpath reset eq comp
+		play play-now seq clock-map clock-split volume pan max-synths searchpath reset eq comp
+		note load-scala set-scala set-diapason set-base-keynum set-scala-microtonal set-scala-interp list-scales
+		scala-description scala-size scala-reset
 		sine saw tri squ white pink adsr add sub mul div pow mooglp moogbp mooghp formant sample
 		crush distort klip echo ks xfade s&h t&h reload zmod modeq? sync-tempo sync-clock fluxa-init fluxa-debug set-global-offset
-		set-bpm-mult logical-time inter pick set-scale in synced-in clear-pings! bootstrap pad mass cryptodistort bpb)
+		set-bpm-mult logical-time inter pick in synced-in clear-pings! bootstrap pad mass cryptodistort bpb)
 
 (define time-offset 0.0)
 (define sync-offset 0.0)
@@ -821,11 +823,295 @@
 (define (comp a r t s)
   (osc-send "/comp" "ffff" (list a r t s)))
 
+;---------------------------------------
+;Scala stuff 
+
+
+; Scala implementation  Copyright 2011-2012 by Joel Matthys
+; joel at matthysmusic dot com
+; Adapted for inclusion in the distribution by Kassen Oud.
+; (type-checking, error reporting, help-entries, etc)
+
+(define *scala-size* 12)
+(define *scala* #f)
+(define *scala-description* "12 note equal tempered scale")
+
+
+;; StartFunctionDoc-en
+;; set-diapason frequency
+;; Returns: void
+;; Description:
+;; Sets the frequency (in Hz) that's the reference for calculating the rest of
+;; the tuning. This will also be the frequency set to the reference key number
+;; set by (set-base-keynum n). Defaults to middle C in equal-tempered tuning,
+;; or 261.6255653006 .
+;; Example:
+;; (set-diapason 440)
+;; EndFunctionDoc
+(define *diapason* 261.6255653006)
+
+(define (set-diapason n)
+	(if (number? n)
+		(begin
+			(set! *diapason* n)
+			(fill-scala-table (- *diapason-key* 60) (+ *diapason-key* 67)))
+	   	(raise-type-error 'set-diapason "number" n)))
+
+;; StartFunctionDoc-en
+;; set-base-keynum number-key
+;; Returns: void
+;; Description:
+;; Sets the number of the key which links to the reference frequency of the 
+;; tuning set by (set-diapason frequency)
+;; Defaults to 60 (middle C in MIDI key numbers)
+;; Example:
+;; (set-base-keynum 60)
+;; EndFunctionDoc
+
+(define *diapason-key* 60)
+
+(define (set-base-keynum n)
+	(if (exact-integer? n)
+		(begin
+			(set! *diapason-key* n)
+			(fill-scala-table (- *diapason-key* 60) (+ *diapason-key* 67)))
+		(raise-type-error 'set-base-keynum "exact-integer" n)))
+	
+
+;; StartFunctionDoc-en
+;; set-scala-microtonal boolean-value
+;; Returns: void
+;; Description:
+;; Turns microtuning on or off.
+;; By default, microtuning is on, allowing quarter-tones, etc, like a violin. 
+;; For instance, in equal temperament, (note 60.5) is a quarter step above 
+;; middle C.
+;; Turn this off to round all inputs to the nearest integer, like a piano.
+;; Use (set-scala-interp n) to pick the method of interpolation
+;; Example:
+;; (set-scala-microtonal #t)
+;; EndFunctionDoc
+
+(define *scala-microtonal* #t)
+
+(define (set-scala-microtonal input)
+	(if (boolean? input)
+		(set! *scala-microtonal* input)
+		(raise-type-error 'set-scala-microtonal "boolean" input)))
+
+;; StartFunctionDoc-en
+;; set-scala-interp integer-value
+;; Returns: void
+;; Description:
+;; Pick the method of microtonal interpolation.
+;; In scala scales the frequency is linear interpolated by default; that is,
+;; (note 60.5) returns the frequency halfway between notes 60 and 61.
+;; If you want a smoother interpolation and can spare the CPU, change to the
+;; slightly more expensive cosine interpolation with (set-scala-interp 1)
+;; or, if you're feeling truly extravagant, you can have beautiful cubic
+;; interpolation with (set-scala-interp 2). Return to linear interp with
+;; (set-scala-interp 0).
+;; Example:
+;; (set-scala-interp 0)
+;; EndFunctionDoc
+
+(define *scala-interp* 0)
+
+(define (set-scala-interp n)
+	(if (exact-nonnegative-integer? n)
+		(set! *scala-interp* n)
+		(raise-type-error 'set-scala-interp "exact-nonnegative-integer" n)))
+
+(define *scala-list* '(("equal"
+		      "12 note equal tempered scale"
+		      12
+		      #f)
+		     ("just"
+		      "12 note just intoned scale"
+		      12
+		      (1 16/15 9/8 6/5 5/4 4/3 45/32 3/2 8/5 5/3 9/5 15/8 2))
+                     ("mean"
+		      "12 note meantone scale"
+		      12
+		      (1 1.069984 1.118034 1.196279 1.25 1.337481 1.397542
+			 1.495349 1.5625 1.671851 1.746928 1.869186 2))
+                     ("pythag"
+		      "7 note Pure Pythagorean scale"
+		      7
+		      (1 9/8 81/64 4/3 3/2 27/16 243/128 2))
+                     ("partch"
+		      "43 note Harry Partch scale"
+		      43
+		      (1 81/80 33/32 21/20 16/15 12/11
+			 11/10 10/9 9/8 8/7 7/6 32/27 6/5 11/9 5/4 14/11
+			 9/7 21/16 4/3 27/20 11/8 7/5 10/7 16/11 40/27 3/2
+			 32/21 14/9 11/7 8/5 18/11 5/3 27/16 12/7 7/4 16/9
+			 9/5 20/11 11/6 15/8 40/21 64/33 160/81 2))))
+
+;; StartFunctionDoc-en
+;; scala-description optional-name-string
+;; Returns: string
+;; Description:
+;; Gets the description of the current tuning from the scala file.
+;; Optionally supply the name of a loaded tuning to get its description.
+;; Example:
+;; (scala-description)
+;; EndFunctionDoc
+
+(define (scala-description [name "current"])
+  (cond
+	((not (string? name)) (raise-type-error 'scala-description "string" name))
+	((equal? name "current") *scala-description*)
+	(else
+	  (let ((ret null))
+		(for-each (lambda (x)
+			(when (equal? name (car x)) (set! ret  (list-ref x 1))))
+			*scala-list*)
+		(if (string? ret)
+			ret
+			(error "scala-description: unknown tuning"))))))
+
+
+;; StartFunctionDoc-en
+;; scala-size optional-name-string
+;; Returns: integer
+;; Description:
+;; Gets the number of keys at which the current tuning repeats.
+;; Most likely this will be the number of keys per octave.
+;; Alternately supply a name to get the number for that tuning.
+;; Example:
+;; (scala-size)
+;; EndFunctionDoc
+
+(define (scala-size [name "current"])
+  (cond
+	((not (string? name)) (raise-type-error 'scala-description "string" name))
+	((equal? name "current") *scala-size*)
+	(else
+	  (let ((ret null))
+		(for-each (lambda (x)
+			(when (equal? name (car x)) (set! ret  (list-ref x 2))))
+			*scala-list*)
+		(if (number? ret)
+			ret
+			(error "scala-size: unknown tuning"))))))
+
+
+;; StartFunctionDoc-en
+;; set-scala name-string
+;; Returns: void
+;; Description:
+;; Sets the tuning for (note n) to use.
+;; use (list-scales) to get a list of the available options and
+;; use (scala-description) to get information on tunings.
+;; Example:
+;; (set-scala "just")
+;; EndFunctionDoc
+
+(define (set-scala name)
+  (cond 
+	((not (string? name)) (raise-type-error 'set-scala "string" name))
+	((equal? name "equal") 
+		(set! *scala-table* *equaltemp-table*)
+		(set! *scala* #f)
+		(set! *scala-size* 12)
+		(set! *scala-description* "12 note equal tempered scale"))
+	(else
+		(for-each (lambda (x)
+		   (cond 
+				((equal? name (car x))
+					(set! *scala-size* (list-ref x 2))
+					(set! *scala* (list-ref x 3))
+					(set! *scala-description* (list-ref x 1)))
+				(else null)))
+			*scala-list*)
+		(fill-scala-table (- *diapason-key* 60) (+ *diapason-key* 67)))))
+
+
+;; StartFunctionDoc-en
+;; scala-reset 
+;; Returns: void
+;; Description:
+;; Resets tuning to equal-tempered, "midi-standard".
+;; In case you get lost.
+;; Example:
+;; (scala-reset)
+;; EndFunctionDoc
+(define (scala-reset)
+	(set! *scala* #f)
+	(set! *diapason* 261.6255653006)
+	(set! *scala-size* 12)
+	(set! *diapason-key* 60)
+	(set! *scala-description* "12 note equal tempered scale")
+    (set! *scala-table* *equaltemp-table*))
+
+
+
+; helper function: linear interpolation
+; (this is probably already in racket somewhere...)
+(define (scala-lint val low-source high-source low-target high-target)
+  (let ((norm-val (/ (- val low-source) (- high-source low-source))))
+    (+ low-target (* norm-val (- high-target low-target)))))
+
+(define (scala-cosint val low-source high-source low-target high-target)
+  (let* ((ft (* (/ (- val low-source) (- high-source low-source))
+		3.141592653589793))
+	 (f (* 0.5 (- 1 (cos ft)))))
+    (+ (* low-target (- 1 f)) (* high-target f))))
+
+(define (scala-cubint val low-source high-source p0 p1 p2 p3)
+  (let* ((x (/ (- val low-source) (- high-source low-source)))
+	 (P (- (- p3 p2) (- p0 p1)))
+	 (Q (- (- p0 p1) P))
+	 (R (- p2 p0)))
+    (+ (* P x x x)
+       (* Q x x)
+       (* R x)
+       p1)))
+
+; for non-equal-temperament scales, fractional keynums are interpolated
+; between integer keynums
+(define (scala-microtonal input)
+  (let* ((low-key (inexact->exact (floor input)))
+	 (high-key (inexact->exact (ceiling input)))
+	 (low-freq (parse-scale low-key))
+	 (high-freq (parse-scale high-key)))
+    (cond ((= *scala-interp* 1)
+	   (scala-cosint input low-key high-key low-freq high-freq))
+	  ((= *scala-interp* 2)
+	   (let ((p0 (parse-scale (- low-key 1)))
+		 (p3 (parse-scale (+ high-key 1))))
+	     (scala-cubint input low-key high-key p0 low-freq high-freq p3)))
+	  (else
+	   (scala-lint input low-key high-key low-freq high-freq)))))
+
+; helper function which calculates frequencies that aren't in *scala-table*
+(define (parse-scale input)
+  (let ((keynum (if *scala-microtonal* input
+		    (inexact->exact (round input)))))
+    (if (not *scala*) ; equal temperament
+	(* *diapason* (expt 2 (/ (- keynum *diapason-key*) 12)))
+					; else custom scale
+	(if (exact-integer? keynum)
+	    (let ((scale-degree (modulo (- keynum *diapason-key*) *scala-size*))
+		  (scale-octave (floor (/ (- keynum *diapason-key*) *scala-size*))))
+	      (* *diapason*
+		 (expt (list-ref *scala* (- (length *scala*) 1))
+		       scale-octave)
+		 (list-ref *scala* scale-degree)))
+	    (scala-microtonal keynum)))))
+
+
 ;; StartFunctionDoc-en
 ;; note note-number
 ;; Returns: frequency-number
 ;; Description:
-;; Returns the frequency for the supplied note. Fluxa uses just intonation by default.
+;; Returns the frequency in Hz for the supplied note. 
+;; Fluxa uses equal-temperament and standard midi note numbers by default.
+;; Use set-scala to change tuning. Use (set-diapason freq) to change the 
+;; reference frequency and (set-base-keynum n) to change the reference
+;; key. Alternately a list of notes may be given to get a list of frequencies.
+;; 
 ;; Example:
 ;; (note 35)
 ;; EndFunctionDoc
@@ -840,12 +1126,206 @@
 ;; (note 35)
 ;; EndFunctionDoc
 
-(define (set-scale s) (set! flx-scale s))
+; the main keynum->freq function. Checks if keynum is in table; if not,
+; calls on (parse-scale ) to calculate it.
+(define (note input)
+  (cond 
+	((number? input)
+	 (let ((test (find-in-table input *scala-table*)))
+	   (if test 
+		 test
+		 (parse-scale input))))
+	((list? input) (map note input))
+	(else (raise-type-error 'note "number or list" input))))
 
-(define flx-scale '(1 1 1 1 1 1 1 1 1 1 1))
+; loads scala file into list
+(define (parse-scala-file filename)
+  (begin
+    (let ((output null))
+      (call-with-input-file filename
+	(lambda (input-port)
+	  (let loop ((x (read-line input-port)))
+	    (if (not (eof-object? x))
+		(begin
+		  (set! output (append output
+				       (list x)))
+		  (loop (read-line input-port))) #t))))
+      output)))
 
-(define (note n)
-  (list-ref scale-lut (modulo (inter flx-scale (abs (inexact->exact (round n)))) (length scale-lut))))
+; removes all lines that start with !
+(define (remove-comment-lines input [result null])
+  (cond ((null? input) result)
+	((equal? #\! (string-ref (car input) 0))
+	 (remove-comment-lines (cdr input) result))
+	(else (remove-comment-lines (cdr input)
+				   (append result
+					   (list (car input)))))))
+
+; I think this is right. I'm curious if a cent is the same size with
+; non-octave scales. I couldn't find any documentation on it.
+(define (cents->ratio c)
+  (expt 2 (/ c 1200)))
+
+(define (scala-intervals input-file [result '(1)])
+  (if (null? input-file)
+      result
+      (let ((test (scala-numberize (string->list (car input-file)))))
+	(if (number? test)
+	    (scala-intervals (cdr input-file)
+			     (append result
+				     (list test)))
+	    (scala-intervals (cdr input-file) result)))))
+
+; ok, this is big and ugly, but basically (scala-numberize)
+; converts a list of characters into a number
+
+(define (scala-numberize input [found-number #f] [result null])
+  (cond ((null? input) ; end of list
+	 (let ((test-number (string->number (list->string result))))
+	   (cond ((not (number? test-number)) #f) ; no number found
+		 ((not (exact? test-number))
+		  (cents->ratio test-number)) ; if not exact, must be cents
+		 (else test-number)))) ; ratio
+	
+	(else
+	 (let* ((current-char (car input)) ; convert char to value
+		(char-val (- (char->integer current-char) 48)))
+	   (cond ((and (not found-number) ; -16 = space
+		       (= char-val -16)) ; leading spaces get skipped
+		  (scala-numberize (cdr input) #f result))
+		 ((and (not found-number)
+		       (or (< char-val -3) (> char-val 9))) #f)
+			 ; if we find non-numbers at the
+			 ; beginning of a line, we assume it's a comment
+		 (else
+		  (scala-numberize (cdr input)
+		      (or found-number ; have we found a number?
+			  (and (>= char-val 0) (<= char-val 9)))
+		      (if (and (>= char-val -3) ; is it a number?
+			       (<= char-val 9)) ; then add it to list
+			  (append result (list current-char))
+			  ; otherwise, don't add it
+			  result))))))))
+
+;; StartFunctionDoc-en
+;; load-scala filename-path nickname-string
+;; Returns: nickname-string
+;; Description:
+;; Loads a scala file and makes the scale available for (set-scala),
+;; as well as immediately loading it.
+;; This in turn sets what tuning (note n) uses.
+;; If no nickname is given then "scala" will be used.
+;; Example:
+;; (load-scala "nice-tuning.scl" "nice")
+;; EndFunctionDoc
+
+
+(define (load-scala filename [new-name "scala"])
+	(cond
+		((not (path-string? filename)) (raise-type-error 'load-scala "path-string" filename))
+		((not (string? new-name)) (raise-type-error 'load-scala "string" new-name))
+		(else
+			  (let ((scale-definition null) (scala-file null))
+				  (set! scala-file (remove-comment-lines (parse-scala-file filename)))
+				  (set! scale-definition (list new-name ; scale name
+							   (car scala-file) ; scale description
+							   (scala-numberize
+								(string->list (list-ref scala-file 1)))
+								; scale size
+							   (scala-intervals (cddr scala-file))))
+				  ; to do: check if scale exists in *scala-list*
+				  ; if so, replace it
+				  (set! *scala-list* (append (list scale-definition)
+							 (remove-dup new-name)))
+				  (set-scala new-name)
+				  (print new-name)))))
+
+(define (remove-dup name [table *scala-list*] [count (length *scala-list*)])
+  (cond ((<= count 0) table)
+	((equal? name (caar table))
+	   (remove-dup name
+			      (cdr table)
+			      (- count 1)))
+	(else (remove-dup name
+			       (append (cdr table) (list (car table)))
+			       (- count 1)))))
+
+;; StartFunctionDoc-en
+;; list-scales
+;; Returns: list of scala tuning name strings
+;; Description:
+;; Gets a list of the currently available scales.
+;; For use with (set-scala)
+;; Use (load-scala "scalafilename.scl" "scale-nickname") to add scales
+;; Example:
+;; (list-scales)
+;; EndFunctionDoc
+
+(define (list-scales)
+  (map (lambda (x) (car x)) *scala-list*))
+
+(define (fill-scala-table low high [current #f] [result null])
+  (cond 
+	((not current) (fill-scala-table low high low null))
+	((> current high) (set! *scala-table* result))
+	(else (fill-scala-table low high (+ current 1)
+		    (append result
+			    (list (list current
+				  (parse-scale current))))))))
+
+(define (find-in-table num table)
+  (if (null? table) #f
+      (let ((result (member num (car table))))
+	(if (and (list? result)
+		 (= 2 (length result)))
+	    (list-ref result 1)
+	    (find-in-table num (cdr table))))))
+
+; default keynum->frequency table (equal temperament)
+(define *equaltemp-table* '((0 8.17579891564375) (1 8.661957218027297)
+ (2 9.177023997419036) (3 9.722718241315079) (4 10.300861153527237)
+ (5 10.91338223228143) (6 11.562325709738635) (7 12.249857374429727)
+ (8 12.978271799373355) (9 13.75) (10 14.567617547440383)
+ (11 15.43385316425396) (12 16.3515978312875) (13 17.323914436054597)
+ (14 18.354047994838066) (15 19.445436482630157) (16 20.601722307054477)
+ (17 21.826764464562853) (18 23.12465141947727) (19 24.49971474885946)
+ (20 25.956543598746702) (21 27.5) (22 29.135235094880773)
+ (23 30.867706328507914) (24 32.703195662575) (25 34.647828872109194)
+ (26 36.70809598967613) (27 38.890872965260314) (28 41.20344461410895)
+ (29 43.653528929125706) (30 46.24930283895454) (31 48.99942949771892)
+ (32 51.913087197493404) (33 55) (34 58.27047018976155) (35 61.73541265701583)
+ (36 65.40639132515) (37 69.29565774421839) (38 73.41619197935228)
+ (39 77.78174593052063) (40 82.4068892282179) (41 87.30705785825143)
+ (42 92.49860567790908) (43 97.99885899543783) (44 103.82617439498682)
+ (45 110) (46 116.54094037952308) (47 123.47082531403167) (48 130.8127826503)
+ (49 138.59131548843678) (50 146.83238395870455) (51 155.56349186104126)
+ (52 164.8137784564358) (53 174.61411571650285) (54 184.99721135581817)
+ (55 195.99771799087566) (56 207.65234878997364) (57 220)
+ (58 233.08188075904616) (59 246.94165062806334) (60 261.6255653006)
+ (61 277.18263097687355) (62 293.6647679174091) (63 311.1269837220825)
+ (64 329.6275569128716) (65 349.2282314330057) (66 369.99442271163633)
+ (67 391.9954359817513) (68 415.30469757994723) (69 440) (70 466.1637615180923)
+ (71 493.88330125612663) (72 523.2511306012) (73 554.3652619537471)
+ (74 587.3295358348182) (75 622.253967444165) (76 659.2551138257433)
+ (77 698.4564628660114) (78 739.9888454232727) (79 783.9908719635026)
+ (80 830.6093951598946) (81 880) (82 932.3275230361846) (83 987.7666025122534)
+ (84 1046.5022612024) (85 1108.7305239074942) (86 1174.6590716696362)
+ (87 1244.50793488833) (88 1318.5102276514865) (89 1396.9129257320226)
+ (90 1479.9776908465453) (91 1567.9817439270055) (92 1661.218790319789)
+ (93 1760) (94 1864.6550460723695) (95 1975.5332050245065) (96 2093.0045224048)
+ (97 2217.4610478149884) (98 2349.3181433392724) (99 2489.01586977666)
+ (100 2637.020455302973) (101 2793.825851464045) (102 2959.9553816930907)
+ (103 3135.963487854011) (104 3322.437580639578) (105 3520)
+ (106 3729.310092144739) (107 3951.066410049013) (108 4186.0090448096)
+ (109 4434.922095629976) (110 4698.636286678547) (111 4978.03173955332)
+ (112 5274.040910605945) (113 5587.651702928092) (114 5919.910763386181)
+ (115 6271.92697570802) (116 6644.8751612791575) (117 7040)
+ (118 7458.620184289476) (119 7902.132820098028) (120 8372.0180896192)
+ (121 8869.844191259952) (122 9397.272573357093) (123 9956.06347910664)
+ (124 10548.08182121189) (125 11175.303405856184) (126 11839.821526772363)
+ (127 12543.85395141604)))
+
+(define *scala-table* *equaltemp-table*)
 
 ;; StartFunctionDoc-en
 ;; reset
@@ -870,21 +1350,6 @@
 
 ;------------------------------
 ; sundry items
-
-;; just intonation (erm I think...)
-(define scale-lut (list 58.2705 61.7354 65.4064 69.2957 73.4162 77.7817
-                        82.4069 87.3071 92.4986 97.9989 103.826 110 116.541 123.471 130.813 138.591
-                        146.832 155.563 164.814 174.614 184.997 195.998 207.652 220 233.082 246.942
-                        261.626 277.183 293.665 311.127 329.628 349.228 369.994 391.995 415.305 440
-                        466.164 493.883 523.251 554.365 587.33 622.254 659.255 698.456 739.989 783.991
-                        830.609 880 932.328 987.767 1046.5 1108.73 1174.66 1244.51 1318.51 1396.91
-                        1479.98 1567.98 1661.22 1760 1864.66 1975.53 2093 2217.46 2349.32 2489.02
-                        2637.02 2793.83 2959.96 3135.96 3322.44 3520 3729.31 3951.07 4186.01 4434.92
-                        4698.64 4978.03 5274.04 5587.65 5919.91 6271.93 6644.88 7040 7458.62 7902.13
-                        8372.02 8869.84 9397.27 9956.06 10548.1 11175.3 11839.8 12543.9 13289.8 14080
-                        14917.2 15804.3 16744 17739.7 18794.5 19912.1 21096.2 22350.6 23679.6 25087.7
-                        26579.5 28160 29834.5 31608.5 33488.1 35479.4 37589.1 39824.3 42192.3 44701.2
-                        47359.3 50175.4 53159 56320))
 
 ; converts from UTC time to get a 64bit NTP timestamp
 (define (time->timestamp time)
